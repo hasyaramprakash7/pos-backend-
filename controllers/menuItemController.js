@@ -21,17 +21,54 @@ const uploadToCloudinary = (buffer) =>
         streamifier.createReadStream(buffer).pipe(stream);
     });
 
-// @desc    Vendor creates a new menu item
-// @route   POST /api/menu
-// @access  Private (Vendor role)
+// Define roles that are PERMITTED to view/manage the menu
+// Vendor/Staff roles who can access the menu interface
+const MENU_ACCESS_ROLES = ['Vendor', 'Server', 'Kitchen', 'Billing']; 
+// Roles permitted to CREATE/UPDATE/DELETE items (usually more restricted)
+const MENU_MANAGEMENT_ROLES = ['Vendor', 'Kitchen']; 
+
+
+// Helper function to check role and approval status
+const checkMenuAccess = (req, res, allowedRoles = MENU_ACCESS_ROLES) => {
+    const vendorId = req.user?.vendorId;
+    const userRole = req.user?.role;
+    const isApproved = req.user?.isApproved;
+    
+    if (!vendorId) {
+        return res.status(403).json({ success: false, msg: 'Vendor/Staff must be linked to a Vendor entity.' });
+    }
+
+    // 1. Check for approved role (Role-based access)
+    if (!allowedRoles.includes(userRole)) {
+        return res.status(403).json({ 
+            success: false, 
+            msg: `Role '${userRole}' is unauthorized for this action.` 
+        });
+    }
+
+    // 2. Check for staff approval status (Approval-based access)
+    // Vendor is always considered approved. This mainly applies to staff roles.
+    if (userRole !== 'Vendor' && !isApproved) {
+        return res.status(403).json({ 
+            success: false, 
+            msg: 'Your account is pending approval by the Vendor owner.' 
+        });
+    }
+
+    return true; // Access granted
+};
+
+// @desc    Vendor creates a new menu item
+// @route   POST /api/menu
+// @access  Private (Vendor/Kitchen roles)
 exports.createMenuItem = async (req, res) => {
-    const vendorId = req.user?.vendorId; // Assuming auth middleware attaches user/vendor data to req.user
+    // 📢 Enforce role and approval checks before processing
+    const accessCheck = checkMenuAccess(req, res, MENU_MANAGEMENT_ROLES);
+    if (accessCheck !== true) return accessCheck;
+    
+    const vendorId = req.user?.vendorId;
 
     try {
-        if (!vendorId) {
-            return res.status(403).json({ success: false, msg: 'Vendor authentication required.' });
-        }
-
         const {
             name, price, description, category, stock, isAvailable
         } = req.body;
@@ -51,7 +88,8 @@ exports.createMenuItem = async (req, res) => {
         
         // 2. Prepare Data and Parse Numbers/Booleans
         const parsedPrice = parseFloat(price);
-        const parsedStock = stock ? parseInt(stock, 10) : undefined;
+        // Use unary plus operator for concise number parsing if you're sure about the string format
+        const parsedStock = stock ? parseInt(stock, 10) : undefined; 
         // Convert 'true'/'false' string from form-data to boolean
         const parsedIsAvailable = typeof isAvailable === 'string' ? (isAvailable === 'true') : isAvailable;
 
@@ -81,35 +119,42 @@ exports.createMenuItem = async (req, res) => {
     }
 };
 
-// @desc    Get all menu items for the vendor
-// @route   GET /api/menu
-// @access  Private (Vendor role)
+// @desc    Get all menu items for the vendor
+// @route   GET /api/menu
+// @access  Private (All Approved Vendor/Staff roles: Vendor, Server, Kitchen, Billing)
 exports.getMenuItems = async (req, res) => {
-    const vendorId = req.user?.vendorId;
+    // 📢 Enforce role and approval checks before processing
+    const accessCheck = checkMenuAccess(req, res, MENU_ACCESS_ROLES);
+    if (accessCheck !== true) return accessCheck;
+    
+    const vendorId = req.user?.vendorId; 
 
     try {
-        if (!vendorId) {
-            return res.status(403).json({ success: false, msg: 'Vendor ID not found in request context.' });
-        }
+        // 3. Fetch items ONLY for the authenticated vendorId (Ownership check)
         const items = await MenuItem.find({ vendorId }).sort({ category: 1, name: 1 });
         res.json({ success: true, items });
+
     } catch (err) {
         console.error("Get Menu Items Error:", err.message);
         res.status(500).json({ success: false, msg: 'Server error retrieving menu items' });
     }
 };
 
-// @desc    Update a menu item
-// @route   PUT /api/menu/:id
-// @access  Private (Vendor role)
+// @desc    Update a menu item
+// @route   PUT /api/menu/:id
+// @access  Private (Vendor/Kitchen roles)
 exports.updateMenuItem = async (req, res) => {
+    // 📢 Enforce role and approval checks before processing
+    const accessCheck = checkMenuAccess(req, res, MENU_MANAGEMENT_ROLES);
+    if (accessCheck !== true) return accessCheck;
+
     const vendorId = req.user?.vendorId;
     const { id } = req.params;
     let updates = req.body;
 
     try {
-        if (!vendorId || !isValidObjectId(id)) {
-            return res.status(400).json({ success: false, msg: 'Invalid request: ID or vendor ID missing/invalid.' });
+        if (!isValidObjectId(id)) {
+            return res.status(400).json({ success: false, msg: 'Invalid menu item ID.' });
         }
 
         // 1. Handle Numeric/Boolean Fields from string
@@ -129,7 +174,7 @@ exports.updateMenuItem = async (req, res) => {
 
         // 3. Find and Update the item, ensuring vendor ownership
         const item = await MenuItem.findOneAndUpdate(
-            { _id: id, vendorId },
+            { _id: id, vendorId }, // CRITICAL: Filter by both _id and vendorId
             { $set: updates },
             { new: true, runValidators: true }
         );
@@ -152,21 +197,25 @@ exports.updateMenuItem = async (req, res) => {
     }
 };
 
-// @desc    Delete a menu item
-// @route   DELETE /api/menu/:id
-// @access  Private (Vendor role)
+// @desc    Delete a menu item
+// @route   DELETE /api/menu/:id
+// @access  Private (Vendor/Kitchen roles)
 exports.deleteMenuItem = async (req, res) => {
+    // 📢 Enforce role and approval checks before processing
+    const accessCheck = checkMenuAccess(req, res, MENU_MANAGEMENT_ROLES);
+    if (accessCheck !== true) return accessCheck;
+
     const vendorId = req.user?.vendorId;
     const { id } = req.params;
 
     try {
-        if (!vendorId || !isValidObjectId(id)) {
-            return res.status(400).json({ success: false, msg: 'Invalid request: ID or vendor ID missing/invalid.' });
+        if (!isValidObjectId(id)) {
+            return res.status(400).json({ success: false, msg: 'Invalid menu item ID.' });
         }
         
         const item = await MenuItem.findOneAndDelete({ 
             _id: id, 
-            vendorId 
+            vendorId // CRITICAL: Ensure only the item belonging to this vendor is deleted
         });
 
         if (!item) {
