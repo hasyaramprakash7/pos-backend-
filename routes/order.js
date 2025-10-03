@@ -14,7 +14,7 @@ const OrderController = require('../controllers/orderController');
  * @desc    Kitchen gets pending/cooking orders
  * @access  Private (Kitchen, Vendor role required)
  */
-router.get('/kitchen', auth(['Kitchen', 'Vendor']), OrderController.getKitchenOrders);
+router.get('/kitchen', auth(['Billing','Server','Kitchen', 'Vendor']), OrderController.getKitchenOrders);
 
 /**
  * @route   GET api/orders/billing
